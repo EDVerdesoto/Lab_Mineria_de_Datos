@@ -1,0 +1,82 @@
+import os
+import xgboost as xgb
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import f1_score
+
+from config import MODEL_PATH, TEST_SIZE, NUM_CLASSES
+from data_loader import get_data_chunks
+from feature_extractor import FeatureExtractor
+
+def train():
+    extractor = FeatureExtractor()
+    
+    xgb_model_input = None
+    if os.path.exists(MODEL_PATH):
+        xgb_model_input = MODEL_PATH
+        print(f"[INFO] Modelo existente cargado desde {MODEL_PATH} para continuar entrenamiento.")
+    else:
+        print(f"[INFO] Nuevo modelo creado para entrenamiento desde cero.")
+        os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
+
+    model = xgb.XGBClassifier(
+        n_estimators=100,
+        objective='multi:softprob',
+        num_class=NUM_CLASSES,
+        tree_method='hist',
+        n_jobs=-1,
+        early_stopping_rounds=10,  # Evita overfitting
+        eval_metric='mlogloss'
+    )
+    
+    print("[INFO] Iniciando Pipeline de Entrenamiento Incremental")
+    
+    chunks = get_data_chunks()
+    metrics_log = []
+    total_samples = 0
+
+    for i, chunk in enumerate(chunks):
+        chunk = chunk.dropna(subset=['code', 'target'])
+        if chunk.empty: 
+            continue
+
+        X_combined, _ = extractor.transform(
+            chunk['code'].astype(str),
+            languages=chunk['language']
+        )
+        y = chunk['target']
+
+        # Verificar que hay suficientes clases para stratify
+        unique_classes = y.nunique()
+        stratify_param = y if unique_classes > 1 else None
+
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_combined, y, test_size=TEST_SIZE, stratify=stratify_param
+        )
+
+        model.fit(
+            X_train, y_train, 
+            xgb_model=xgb_model_input,
+            eval_set=[(X_val, y_val)],
+            verbose=False
+        )
+        model.save_model(MODEL_PATH)
+        xgb_model_input = MODEL_PATH 
+
+        y_pred = model.predict(X_val)
+        f1 = f1_score(y_val, y_pred, average='weighted')
+        metrics_log.append(f1)
+        total_samples += len(chunk)
+        
+        print(f"[SUCCESS] Chunk {i+1} | Muestras: {total_samples:,} | F1: {f1:.4f}")
+
+    if metrics_log:
+        print(f"\n[INFO] Entrenamiento Finalizado.")
+        print(f"[INFO] Total muestras procesadas: {total_samples:,}")
+        print(f"[INFO] F1 Promedio: {np.mean(metrics_log):.4f} (±{np.std(metrics_log):.4f})")
+        print(f"[INFO] Modelo guardado en: {MODEL_PATH}")
+    else:
+        print("[WARN] No se procesaron chunks. Verifica el dataset.")
+
+if __name__ == "__main__":
+    train()
