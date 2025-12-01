@@ -2,153 +2,246 @@ import unittest
 import os
 import shutil
 import sys
-import ast
-import textwrap  # <--- IMPORTANTE: Necesario para limpiar la indentación
+import textwrap
+import pandas as pd
 
-# Añadimos el directorio padre al path para poder importar src
+# Ajustar path para importar src
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.extract_features import analyze_single_file, SecurityVisitor
+from extract_features import analyze_file
 
-class TestSecurityVisitor(unittest.TestCase):
-    """
-    Tests Unitarios para la clase SecurityVisitor (AST).
-    Verifica la lógica de detección de anidamiento y funciones peligrosas.
-    """
-
-    def _visit_code(self, code_str):
-        """Helper para parsear código y ejecutar el visitante."""
-        # Limpiamos la indentación antes de parsear
-        clean_code = textwrap.dedent(code_str).strip()
-        tree = ast.parse(clean_code)
-        visitor = SecurityVisitor()
-        visitor.visit(tree)
-        return visitor
-
-    def test_nesting_ignores_function_def(self):
-        """Verifica que 'def' NO aumente el nivel de anidamiento."""
-        code = """
-        def mi_funcion():
-            if True:        # Nivel 1
-                print("x")
-        """
-        visitor = self._visit_code(code)
-        # def (0) -> if (1). Max depth debe ser 1.
-        self.assertEqual(visitor.max_depth, 1, "El 'def' no debería contar como anidamiento.")
-
-    def test_nesting_deep_logic(self):
-        """Verifica anidamiento profundo real."""
-        code = """
-        if A:                   # 1
-            for i in range(10): # 2
-                try:            # 3
-                    pass
-                except:
-                    pass
-        """
-        visitor = self._visit_code(code)
-        self.assertEqual(visitor.max_depth, 3)
-
-    def test_detect_eval(self):
-        """Debe detectar la función 'eval'."""
-        code = "x = eval('2 + 2')"
-        visitor = self._visit_code(code)
-        self.assertEqual(visitor.dangerous_count, 1)
-
-    def test_detect_exec(self):
-        """Debe detectar la función 'exec'."""
-        code = "exec('import os')"
-        visitor = self._visit_code(code)
-        self.assertEqual(visitor.dangerous_count, 1)
-
-    def test_detect_os_system(self):
-        """Debe detectar 'system' (comunmente os.system)."""
-        code = """
-        import os
-        os.system("rm -rf /")
-        """
-        visitor = self._visit_code(code)
-        self.assertEqual(visitor.dangerous_count, 1)
-
-    def test_safe_code_zero_danger(self):
-        """Código normal no debe disparar alertas."""
-        code = "print('Hola mundo')"
-        visitor = self._visit_code(code)
-        self.assertEqual(visitor.dangerous_count, 0)
-
-
-class TestIntegrationAnalysis(unittest.TestCase):
-    """
-    Tests de Integración: Crea archivos reales y prueba 'analyze_single_file'.
-    Verifica que Lizard y AST trabajen juntos y generen el diccionario correcto.
-    """
+class TestFeatureExtractorPro(unittest.TestCase):
     
-    TEMP_DIR = "test_samples_temp"
+    TEMP_DIR = "test_samples_pro"
 
     @classmethod
     def setUpClass(cls):
-        """Crea un directorio temporal para las pruebas."""
+        """Prepara el entorno de pruebas."""
         if os.path.exists(cls.TEMP_DIR):
             shutil.rmtree(cls.TEMP_DIR)
         os.makedirs(cls.TEMP_DIR)
 
     @classmethod
     def tearDownClass(cls):
-        """Borra el directorio temporal al finalizar."""
+        """Limpia todo al terminar."""
         if os.path.exists(cls.TEMP_DIR):
             shutil.rmtree(cls.TEMP_DIR)
 
-    def create_dummy_file(self, filename, content):
+    def create_file(self, filename, content):
+        """Helper para crear archivos limpiando indentación."""
         path = os.path.join(self.TEMP_DIR, filename)
-        # Limpiamos la indentación antes de escribir al archivo
-        clean_content = textwrap.dedent(content).strip()
-        with open(path, "w", encoding='utf-8') as f:
-            f.write(clean_content)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(textwrap.dedent(content).strip())
         return path
 
-    def test_analyze_vulnerable_file(self):
-        """Prueba un archivo que debería ser marcado como VULNERABLE (1)."""
-        filename = "CWE78_OS_Command_Injection__bad.py"
+    # ==========================================
+    # 1. PYTHON TESTS (3 Casos)
+    # ==========================================
+    
+    def test_py_01_os_system(self):
+        """Caso 1 Python: Inyección de Comandos clásica."""
         content = """
         import os
-        def bad_code():
-            os.system("ls") # Danger!
+        def delete_logs(user_input):
+            # Vulnerable a inyección
+            os.system("rm -rf " + user_input)
         """
-        path = self.create_dummy_file(filename, content)
-        result = analyze_single_file(path, filename)
-        
-        self.assertIsNotNone(result)
-        # Verificamos etiqueta por nombre
-        self.assertEqual(result['is_vulnerable'], 1, "Debería detectar 'bad' en el nombre.")
-        # Verificamos detección de AST (Si falla aquí, es que el AST no parseó bien el file)
-        self.assertEqual(result['uses_dangerous_funcs'], 1, "Debería detectar os.system")
-        # Verificamos Lizard
-        self.assertEqual(result['num_functions'], 1)
+        res = analyze_file(self.create_file("py_vuln_1.py", content), "py_vuln_1.py")
+        self.assertEqual(res['uses_dangerous_funcs'], 1, "Debe detectar os.system")
+        self.assertEqual(res['nesting_depth'], 1)
 
-    def test_analyze_safe_file(self):
-        """Prueba un archivo que debería ser marcado como SEGURO (0)."""
-        filename = "CWE78_OS_Command_Injection__good.py"
+    def test_py_02_eval_exec(self):
+        """Caso 2 Python: Ejecución dinámica de código."""
         content = """
-        def good_code():
-            print("Safe")
+        def calc(expression):
+            # Vulnerable a inyección de código
+            return eval(expression)
+            
+        def dynamic_load(code):
+            exec(code)
         """
-        path = self.create_dummy_file(filename, content)
-        result = analyze_single_file(path, filename)
-        
-        self.assertEqual(result['is_vulnerable'], 0, "Debería detectar 'good' en el nombre.")
-        self.assertEqual(result['uses_dangerous_funcs'], 0)
+        res = analyze_file(self.create_file("py_vuln_2.py", content), "py_vuln_2.py")
+        self.assertEqual(res['uses_dangerous_funcs'], 2, "Debe detectar eval y exec")
 
-    def test_syntax_error_handling(self):
-        """Prueba que el script no explote con errores de sintaxis."""
-        filename = "broken.py"
-        content = "def funcion_rota( print('falta parentesis'"
-        path = self.create_dummy_file(filename, content)
+    def test_py_03_safe_complex(self):
+        """Caso 3 Python: Código seguro pero con anidamiento profundo."""
+        content = """
+        def procesar_datos(lista):
+            if lista:
+                for item in lista:
+                    try:
+                        if item > 0:
+                            print(item)
+                    except:
+                        pass
+        """
+        res = analyze_file(self.create_file("py_safe.py", content), "py_safe.py")
+        self.assertEqual(res['uses_dangerous_funcs'], 0, "No debe haber vulnerabilidades")
         
-        # No debería lanzar excepción, sino retornar métricas parciales o seguras
-        result = analyze_single_file(path, filename)
+        # CORRECCIÓN: Esperamos 5.
+        # Explicación: def(0) -> if(1) -> for(2) -> try(3) -> if(4) -> print(5)
+        # La línea más profunda ('print') está indentada 5 niveles.
+        self.assertEqual(res['nesting_depth'], 5)
+
+    # ==========================================
+    # 2. JAVA TESTS (3 Casos)
+    # ==========================================
+
+    def test_java_01_runtime(self):
+        """Caso 1 Java: Runtime.exec()."""
+        content = """
+        class Danger {
+            public void runCommand(String cmd) {
+                try {
+                    Runtime.getRuntime().exec(cmd);
+                } catch(Exception e) {}
+            }
+        }
+        """
+        res = analyze_file(self.create_file("J_Vuln1.java", content), "J_Vuln1.java")
+        self.assertEqual(res['uses_dangerous_funcs'], 1, "Debe detectar .exec(")
+
+    def test_java_02_processbuilder(self):
+        """Caso 2 Java: ProcessBuilder (El que fallaba antes)."""
+        content = """
+        public class VulnClass {
+            public static void main(String[] args) {
+                // Comentario mencionando ProcessBuilder que NO debe contar
+                ProcessBuilder pb = new ProcessBuilder("cmd", "/c", "dir");
+                pb.start();
+            }
+        }
+        """
+        res = analyze_file(self.create_file("J_Vuln2.java", content), "J_Vuln2.java")
+        # Ahora el regex busca 'new ProcessBuilder', así que debe ser 1 exacto
+        self.assertEqual(res['uses_dangerous_funcs'], 1, "Debe detectar solo la instanciación de ProcessBuilder")
+
+    def test_java_03_safe_deep(self):
+        """Caso 3 Java: Código seguro anidado."""
+        content = """
+        public class Safe {
+            void loop() {            
+                if (true) {          
+                    while (true) {   
+                         System.out.println("Safe");
+                    }
+                }
+            }
+        }
+        """
+        res = analyze_file(self.create_file("J_Safe.java", content), "J_Safe.java")
+        self.assertEqual(res['uses_dangerous_funcs'], 0)
         
-        self.assertIsNotNone(result)
-        self.assertIn('loc', result)
+        # CORRECCIÓN: Esperamos 4.
+        # Explicación: Class{ (1) -> Method{ (2) -> If{ (3) -> While{ (4)
+        self.assertEqual(res['nesting_depth'], 4)
+
+    # ==========================================
+    # 3. PHP TESTS (3 Casos)
+    # ==========================================
+
+    def test_php_01_shell_exec(self):
+        """Caso 1 PHP: shell_exec."""
+        content = """
+        <?php
+        $output = shell_exec('ls -l');
+        ?>
+        """
+        res = analyze_file(self.create_file("vuln.php", content), "vuln.php")
+        self.assertEqual(res['uses_dangerous_funcs'], 1)
+
+    def test_php_02_system_false_positive(self):
+        """Caso 2 PHP: 'system' vs 'filesystem' (Prueba de Word Boundary)."""
+        content = """
+        <?php
+        system("rm -rf /");       // Peligroso (1)
+        $var = filesystem_check(); // Seguro (0) - No debe confundirse
+        ?>
+        """
+        res = analyze_file(self.create_file("boundary.php", content), "boundary.php")
+        self.assertEqual(res['uses_dangerous_funcs'], 1, "Solo debe detectar 'system', no 'filesystem'")
+
+    def test_php_03_safe(self):
+        """Caso 3 PHP: HTML y Echo."""
+        content = """
+        <?php echo "Hola Mundo"; ?>
+        """
+        res = analyze_file(self.create_file("safe.php", content), "safe.php")
+        self.assertEqual(res['uses_dangerous_funcs'], 0)
+
+    # ==========================================
+    # 4. JAVASCRIPT TESTS (3 Casos)
+    # ==========================================
+
+    def test_js_01_eval(self):
+        """Caso 1 JS: Eval directo."""
+        content = "eval('2 + 2');"
+        res = analyze_file(self.create_file("vuln1.js", content), "vuln1.js")
+        self.assertEqual(res['uses_dangerous_funcs'], 1)
+
+    def test_js_02_settimeout_string(self):
+        """Caso 2 JS: setTimeout con string (implica eval)."""
+        content = """
+        setTimeout("alert('Hacked')", 1000);
+        """
+        res = analyze_file(self.create_file("vuln2.js", content), "vuln2.js")
+        self.assertEqual(res['uses_dangerous_funcs'], 1)
+
+    def test_js_03_safe_nesting(self):
+        """Caso 3 JS: Callbacks anidados (Callback Hell)."""
+        content = """
+        function a() {
+            if (x) {
+                items.forEach(i => {
+                    console.log(i);
+                });
+            }
+        }
+        """
+        res = analyze_file(self.create_file("safe.js", content), "safe.js")
+        # Function(1) -> If(2) -> forEach(3)
+        self.assertTrue(res['nesting_depth'] >= 3)
+        self.assertEqual(res['uses_dangerous_funcs'], 0)
+
+    # ==========================================
+    # 5. C++ TESTS (3 Casos)
+    # ==========================================
+
+    def test_cpp_01_system(self):
+        """Caso 1 C++: system()."""
+        content = """
+        #include <stdlib.h>
+        int main() {
+            system("pause");
+            return 0;
+        }
+        """
+        res = analyze_file(self.create_file("vuln1.cpp", content), "vuln1.cpp")
+        self.assertEqual(res['uses_dangerous_funcs'], 1)
+
+    def test_cpp_02_strcpy(self):
+        """Caso 2 C++: Buffer Overflow clásico (strcpy)."""
+        content = """
+        #include <string.h>
+        void copy(char* src) {
+            char dest[10];
+            strcpy(dest, src); // Peligroso
+        }
+        """
+        res = analyze_file(self.create_file("vuln2.cpp", content), "vuln2.cpp")
+        self.assertEqual(res['uses_dangerous_funcs'], 1)
+
+    def test_cpp_03_safe(self):
+        """Caso 3 C++: Hello World."""
+        content = """
+        #include <iostream>
+        int main() {
+            std::cout << "Hello World";
+            return 0;
+        }
+        """
+        res = analyze_file(self.create_file("safe.cpp", content), "safe.cpp")
+        self.assertEqual(res['uses_dangerous_funcs'], 0)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
