@@ -33,8 +33,9 @@ TEST_SIZE = 0.2
 WARMUP_RATIO = 0.1
 
 # Extractores
-MAX_CODE_LENGTH = 50_000  # Límite para evitar regex catastrophic backtracking
+MAX_CODE_LENGTH = 10_000  # Límite para Lizard y regex (50k era muy lento)
 HASHING_FEATURES = 4096  # Para TextExtractor (no usado en híbrido)
+FEATURE_EXTRACTION_WORKERS = 4  # Threads para extracción paralela de features
 
 # Clases CWE más comunes (para clasificación multi-clase)
 TOP_CWES = [

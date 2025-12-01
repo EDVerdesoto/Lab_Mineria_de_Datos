@@ -1,10 +1,11 @@
 """
 Extractor de patrones de vulnerabilidad basado en regex.
-Incluye localización de líneas vulnerables.
+Incluye localización de líneas vulnerables y caché para rendimiento.
 """
 
 import re
-from typing import List, Dict
+import hashlib
+from typing import List, Dict, Tuple, Optional
 
 from .base import BaseExtractor
 from config import MAX_CODE_LENGTH
@@ -14,6 +15,11 @@ class PatternExtractor(BaseExtractor):
     """
     Extrae características basadas en patrones de vulnerabilidad.
     También puede localizar las líneas exactas donde se detectan.
+    
+    Optimizaciones:
+    - Patrones pre-compilados
+    - Caché LRU para códigos repetidos
+    - Early exit para código vacío/corto
     """
     
     # Patrones optimizados (non-greedy para evitar backtracking)
@@ -57,22 +63,39 @@ class PatternExtractor(BaseExtractor):
         'dangerous_functions': 'CWE-94'
     }
     
-    def __init__(self, patterns: Dict[str, List[str]] = None):
+    def __init__(self, patterns: Dict[str, List[str]] = None, cache_size: int = 10000):
         self.patterns = patterns if patterns is not None else self.DEFAULT_PATTERNS.copy()
         self._compile_patterns()
         self._update_feature_names()
+        
+        # Caché
+        self._cache_size = cache_size
+        self._cache: Dict[str, Tuple[float, ...]] = {}
+        self._cache_hits = 0
+        self._cache_misses = 0
     
     def _compile_patterns(self) -> None:
         """Pre-compila patrones regex para mejor rendimiento."""
         self._compiled = {}
+        # Combinar patrones de cada categoría en una sola regex con grupos
+        self._combined = {}
+        
         for category, pattern_list in self.patterns.items():
             self._compiled[category] = [
                 re.compile(p, re.IGNORECASE) for p in pattern_list
             ]
+            # Regex combinada para conteo rápido
+            combined_pattern = '|'.join(f'(?:{p})' for p in pattern_list)
+            self._combined[category] = re.compile(combined_pattern, re.IGNORECASE)
     
     def _update_feature_names(self) -> None:
         """Actualiza nombres de features según patrones activos."""
         self._feature_names = [f'{cat}_count' for cat in self.patterns.keys()]
+    
+    def _compute_hash(self, code: str) -> str:
+        """Genera hash rápido para el caché."""
+        key = f"{len(code)}:{code[:100]}:{code[-100:] if len(code) > 100 else ''}"
+        return hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()
     
     def extract(self, code: str, language: str = None) -> List[float]:
         """
@@ -81,19 +104,36 @@ class PatternExtractor(BaseExtractor):
         Returns:
             Lista con conteo por cada categoría de patrón.
         """
-        counts = []
-        code_str = str(code)
+        code_str = str(code) if code else ""
+        
+        # Early exit para código vacío o muy corto
+        if len(code_str) < 5:
+            return [0.0] * len(self.patterns)
         
         # Limitar tamaño para evitar regex catastrophic backtracking
         if len(code_str) > MAX_CODE_LENGTH:
             code_str = code_str[:MAX_CODE_LENGTH]
         
+        # Verificar caché
+        cache_key = self._compute_hash(code_str)
+        if cache_key in self._cache:
+            self._cache_hits += 1
+            return list(self._cache[cache_key])
+        
+        self._cache_misses += 1
+        
+        # Usar regex combinada para conteo más rápido
+        counts = []
         for category in self.patterns.keys():
-            count = 0
-            for compiled_pattern in self._compiled[category]:
-                matches = compiled_pattern.findall(code_str)
-                count += len(matches)
-            counts.append(float(count))
+            matches = self._combined[category].findall(code_str)
+            counts.append(float(len(matches)))
+        
+        # Guardar en caché
+        if len(self._cache) >= self._cache_size:
+            oldest_key = next(iter(self._cache))
+            del self._cache[oldest_key]
+        
+        self._cache[cache_key] = tuple(counts)
         
         return counts
     
@@ -171,3 +211,20 @@ class PatternExtractor(BaseExtractor):
     @property
     def categories(self) -> List[str]:
         return list(self.patterns.keys())
+    
+    def clear_cache(self):
+        """Limpia el caché y reinicia contadores."""
+        self._cache.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
+    
+    def get_cache_stats(self) -> Dict[str, int]:
+        """Retorna estadísticas del caché."""
+        total = self._cache_hits + self._cache_misses
+        hit_rate = (self._cache_hits / total * 100) if total > 0 else 0
+        return {
+            'cache_size': len(self._cache),
+            'cache_hits': self._cache_hits,
+            'cache_misses': self._cache_misses,
+            'hit_rate_percent': round(hit_rate, 2)
+        }
