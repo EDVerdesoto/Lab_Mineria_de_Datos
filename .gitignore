@@ -1,2 +1,18 @@
 /data
 *.csv
+venv/
+src/v0/venv/
+./src/v0/venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Sistema
+.DS_Store
+Thumbs.db
