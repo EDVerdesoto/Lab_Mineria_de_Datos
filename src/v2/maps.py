@@ -1,15 +1,11 @@
 # Etiquetas de las Top CWE más comunes
 TOP_CWES = [
-    'CWE-79', 
-    'CWE-787',
-    'CWE-89',
-    'CWE-352', 
-    'CWE-22',
-    'CWE-125',
-    'CWE-78',
-    'CWE-416',
-    'CWE-862',
-    'CWE-434',
+    'CWE-79',  # XSS
+    'CWE-89',  # SQL Injection
+    'CWE-78',  # OS Command Injection
+    'CWE-22',  # Path Traversal
+    'CWE-434', # Unrestricted File Upload
+    'CWE-352'  # CSRF
 ]
 
 # Mapa: Safe=0, TopN=1..N, Other=N+1
