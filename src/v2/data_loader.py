@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
-from embedder import CodeEmbedder
-from maps import LABEL_MAP, OTHER_LABEL, LANG_MAP, NUM_LANGS
+from .embedder import CodeEmbedder
+from .maps import LABEL_MAP, OTHER_LABEL, LANG_MAP, NUM_LANGS
 
 def get_label(row):
     cwe = row['cwe_id']
