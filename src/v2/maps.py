@@ -1,7 +1,7 @@
 # Etiquetas de las Top CWE más comunes
 TOP_CWES = [
     'CWE-79', 
-    'CWE-787', 
+    'CWE-787',
     'CWE-89',
     'CWE-352', 
     'CWE-22',
