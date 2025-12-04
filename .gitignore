@@ -19,3 +19,5 @@ Thumbs.db
 # Modelos
 */*.pt
 *.pt
+*/*.bin
+*.bin

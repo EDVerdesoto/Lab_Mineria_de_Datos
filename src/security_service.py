@@ -3,140 +3,7 @@ from typing import List, Dict, Set, Any
 from metrics_core import extract_metrics_from_text
 import lizard
 
-# ==============================================================================
-# 1. BASE DE CONOCIMIENTO (Tus definiciones)
-# ==============================================================================
-
-# Lista de indicadores críticos (Tokens que el modelo debe "mirar")
-
-VULNERABILITY_INDICATORS = {
-    # =========================================================================
-    # CWE-89: SQL Injection
-    # =========================================================================
-    'execute', 'executemany', 'executescript', 'executequery', 'executeupdate',
-    'cursor', 'query', 'rawquery', 'raw', 'nativequery', 'createquery',
-    'preparestatement', 'preparedstatement', 'statement',
-    'select', 'insert', 'update', 'delete', 'drop', 'truncate', 'alter',
-    'where', 'from', 'join', 'union', 'having', 'order', 'group',
-    'sqlalchemy', 'hibernate', 'jdbc', 'mybatis', 'sequelize', 'knex',
-    
-    # =========================================================================
-    # CWE-79: XSS (Cross-Site Scripting)
-    # =========================================================================
-    'innerhtml', 'outerhtml', 'innertext', 'textcontent',
-    'documentwrite', 'writeln', 'createelement', 'appendchild',
-    'insertadjacenthtml', 'setattribute',
-    'jquery', 'html', 'append', 'prepend',
-    'dangerouslysetinnerhtml',
-    'bypasssecuritytrust',
-    'safe', 'mark_safe', 'autoescape', 'noescape',
-    
-    # =========================================================================
-    # CWE-78: OS Command Injection
-    # =========================================================================
-    'system', 'popen', 'subprocess', 'call', 'check_output', 'check_call',
-    'spawn', 'fork', 'exec', 'execfile', 'execl', 'execv', 'execve',
-    'shell_exec', 'passthru', 'proc_open',
-    'runtime', 'getruntime', 'processbuilder',
-    'child_process', 'execsync',
-    'shell', 'cmd', 'command', 'bash', 'powershell',
-    
-    # =========================================================================
-    # CWE-22: Path Traversal
-    # =========================================================================
-    'open', 'read', 'write', 'readfile', 'writefile',
-    'fopen', 'fread', 'fwrite', 'file_get_contents', 'file_put_contents',
-    'path', 'join', 'abspath', 'realpath', 'normpath',
-    'dirname', 'basename', 'filepath', 'filename',
-    'include', 'require', 'include_once', 'require_once',
-    'sendfile', 'download', 'attachment',
-    'listdir', 'scandir', 'glob', 'walk',
-    'unlink', 'remove', 'delete', 'mkdir', 'rmdir',
-    
-    # =========================================================================
-    # CWE-434: Unrestricted File Upload
-    # =========================================================================
-    'upload', 'fileupload', 'multipart', 'formdata',
-    'saveas', 'move_uploaded_file', 'moveuploaded',
-    'getoriginalfilename', 'getfilename', 'getcontenttype',
-    'mimetype', 'extension', 'getsize',
-    'tempfile', 'temporary',
-    
-    # =========================================================================
-    # CWE-352: CSRF
-    # =========================================================================
-    'csrf', 'csrftoken', 'csrf_token', 'xsrf', 'xsrftoken',
-    'antiforgery', 'validateantiforgerytoken', 'csrf_exempt',
-    'samesite', 'origin', 'referer',
-    
-    # =========================================================================
-    # CWE-502: Deserialization
-    # =========================================================================
-    'pickle', 'unpickle', 'loads', 'load', 'dumps', 'dump',
-    'yaml', 'unsafe_load', 'marshal', 'shelve',
-    'unserialize', 'serialize',
-    'objectinputstream', 'readobject', 'xmldecoder',
-    'deserialize', 'jsonpickle', 'dill',
-    
-    # =========================================================================
-    # CWE-611: XXE
-    # =========================================================================
-    'xml', 'parse', 'parsestring', 'etree', 'minidom',
-    'saxparser', 'xmlreader', 'documentbuilder',
-    'loadxml', 'entity', 'dtd', 'doctype',
-    
-    # =========================================================================
-    # CWE-918: SSRF
-    # =========================================================================
-    'request', 'requests', 'urllib', 'urlopen', 'httplib',
-    'fetch', 'axios', 'http', 'https', 'curl', 'curl_exec',
-    'httpclient', 'webclient', 'resttemplate',
-    
-    # =========================================================================
-    # CWE-94: Code Injection
-    # =========================================================================
-    'eval', 'exec', 'compile', 'execfile',
-    'function', 'settimeout', 'setinterval',
-    'constructor', 'prototype',
-    'reflection', 'invoke', 'getmethod', 'forname',
-    'template', 'render', 'render_template',
-    
-    # =========================================================================
-    # Authentication / Secrets
-    # =========================================================================
-    'password', 'passwd', 'secret', 'secretkey', 'apikey', 'api_key',
-    'token', 'accesstoken', 'privatekey', 'credential',
-    'auth', 'authenticate', 'login', 'session', 'cookie',
-    'jwt', 'bearer', 'oauth',
-    'hash', 'md5', 'sha1', 'sha256', 'bcrypt',
-    
-    # =========================================================================
-    # Input Sources
-    # =========================================================================
-    'request', 'req', 'input', 'stdin',
-    'params', 'query', 'body', 'form', 'args',
-    'getparameter', 'getheader',
-    'get', 'post', 'put', 'delete',
-    'argv', 'environ', 'getenv',
-    'userinput', 'userdata',
-    
-    # =========================================================================
-    # Crypto (Weak)
-    # =========================================================================
-    'random', 'rand', 'mt_rand',
-    'des', 'rc4', 'md5', 'sha1', 'ecb',
-    'encrypt', 'decrypt', 'cipher',
-    
-    # =========================================================================
-    # Memory (C/C++)
-    # =========================================================================
-    'strcpy', 'strcat', 'sprintf', 'gets', 'scanf',
-    'memcpy', 'memmove', 'malloc', 'free',
-    'buffer', 'overflow',
-}
-
-
-INDICATORS_SET = frozenset(VULNERABILITY_INDICATORS)
+from v3.vulnerability_indicators import INDICATORS_SET, RESERVED_WORDS_SET
 
 # Reglas estáticas de "Code Smell" o malas prácticas
 STATIC_RULES = {
@@ -185,7 +52,7 @@ class SecurityFeatureExtractor:
             return []
 
         if not analysis.function_list:
-             return [self._analyze_single_block(code, "main_script", 1, len(code.splitlines()), lang_key, filename)]
+            return [self._analyze_single_block(code, "main_script", 1, len(code.splitlines()), lang_key, filename)]
 
         lines = code.splitlines()
         
@@ -241,6 +108,7 @@ class SecurityFeatureExtractor:
             "function_name": func_name,
             "start_line": start_line,
             "end_line": end_line,
+            "code": code_snippet,  # <--- Código de la función para CodeBERT
             "risk_score": risk_score,
             "features": {
                 "nloc": metrics.get("nloc", 0),
