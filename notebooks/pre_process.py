@@ -99,7 +99,6 @@ def main():
         
     print(f"Guardando {len(all_data)} muestras procesadas en {OUTPUT_FILE}...")
     torch.save(all_data, OUTPUT_FILE)
-    print("¡LISTO! Ahora tu entrenamiento volará. 🚀")
 
 if __name__ == '__main__':
     main()
