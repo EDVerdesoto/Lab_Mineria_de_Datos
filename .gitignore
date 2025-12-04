@@ -16,3 +16,6 @@ build/
 # Sistema
 .DS_Store
 Thumbs.db
+# Modelos
+*/*.pt
+*.pt

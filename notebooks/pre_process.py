@@ -1,104 +1,142 @@
 import pandas as pd
 import torch
 import numpy as np
+import gc
+import shutil
+import glob
 from tqdm import tqdm
-from multiprocessing import Pool, cpu_count
+from multiprocessing import Pool, cpu_count, set_start_method
 from transformers import AutoTokenizer
+from sklearn.model_selection import train_test_split
 
 import sys
 import os
 
+# Ajusta esto a tu estructura de carpetas real
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.v3.dataset import VulnDataset
 from src.v3.map_cwe import get_label_id
 
+# Estrategia para evitar límite de archivos abiertos
+try:
+    torch.multiprocessing.set_sharing_strategy('file_system')
+except:
+    pass
+
 # --- CONFIGURACIÓN ---
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_FILE = os.path.join(BASE_DIR, "data", "processed", "dataset_ml_ready.csv")
-OUTPUT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "train_dataset_cached.pt")
+
+# CAMBIO: Usamos directorios en lugar de archivos únicos
+OUTPUT_DIR_TRAIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "train_cache")
+OUTPUT_DIR_VAL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "val_cache")
+
 MODEL_NAME = "microsoft/codebert-base"
 MAX_LEN = 512
 STRIDE = 256
 MAX_WINDOWS = 8
-USE_AUGMENTATION = False  # ¿Quieres guardar datos aumentados?
-AUGMENT_PROB = 0.3      # Si es True, 30% de probabilidad por muestra
+AUGMENT_PROB = 0.3
 MASK_PROB = 0.10
+TEST_SIZE = 0.1
+SEED = 42
 
-# Función auxiliar para procesar un chunk de datos en un proceso separado
 def process_chunk(args):
-    """
-    Esta función se ejecuta en paralelo en cada núcleo.
-    Recibe un subconjunto de datos y devuelve la lista procesada.
-    """
-    df_chunk, tokenizer_path = args
+    """Procesa un chunk y retorna una lista de diccionarios (tensores)"""
+    df_chunk, tokenizer_path, use_augmentation = args
     
-    # Re-instanciar tokenizer dentro del proceso (necesario para multiprocessing en Windows)
+    # Re-instanciar tokenizer en cada proceso
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
     
-    # Usamos tu clase original para aprovechar su lógica
-    # Nota: Desactivamos el 'augment' del dataset para controlarlo manualmente si quisiéramos
-    # pero aquí lo dejamos activado según la config global.
     dataset = VulnDataset(
         codes=df_chunk['code'].values,
         labels=df_chunk['label_id'].values,
         tokenizer=tokenizer,
-        training=USE_AUGMENTATION, # ¡OJO! Si es True, quemará la augmentación en el archivo
-        use_augmentation=USE_AUGMENTATION,
+        training=use_augmentation,
+        use_augmentation=use_augmentation,
         use_sliding_window=True,
-        augment_prob=AUGMENT_PROB,
-        mask_prob=MASK_PROB,
+        augment_prob=AUGMENT_PROB if use_augmentation else 0,
+        mask_prob=MASK_PROB if use_augmentation else 0,
         max_len=MAX_LEN,
         stride=STRIDE,
         max_windows=MAX_WINDOWS
     )
     
     processed_samples = []
-    # Iteramos manualmente para extraer los datos ya procesados (__getitem__)
     for i in range(len(dataset)):
         try:
             sample = dataset[i]
             processed_samples.append(sample)
         except Exception as e:
-            # Capturar errores para no tumbar todo el proceso
-            print(f"Error en muestra {i}: {e}")
+            print(f"Error ignorable en muestra {i}: {e}")
             continue
             
     return processed_samples
 
+def setup_output_dir(directory):
+    """Crea directorio limpio para guardar partes"""
+    if os.path.exists(directory):
+        print(f"Limpiando directorio existente: {directory}")
+        shutil.rmtree(directory)
+    os.makedirs(directory)
+
+def process_and_save(df, output_dir, use_augment, num_cores):
+    """Lógica genérica para procesar y guardar incrementalmente"""
+    print(f"Procesando {len(df)} muestras -> {output_dir}")
+    
+    # Dividir en muchos chunks pequeños (ej. 40 chunks) para liberar RAM rápido
+    # Cuantos más chunks, menos RAM usa, pero más archivos genera.
+    num_chunks = num_cores * 10 
+    df_chunks = np.array_split(df, num_chunks)
+    
+    tasks = [(chunk, MODEL_NAME, use_augment) for chunk in df_chunks]
+    
+    with Pool(processes=num_cores) as pool:
+        # Usamos imap para recibir resultados apenas estén listos
+        for i, result in tqdm(enumerate(pool.imap(process_chunk, tasks)), total=len(tasks)):
+            if not result: continue # Saltar chunks vacíos si los hay
+            
+            # GUARDAR INMEDIATAMENTE
+            save_path = os.path.join(output_dir, f"part_{i}.pt")
+            torch.save(result, save_path)
+            
+            # LIBERAR MEMORIA
+            del result
+            gc.collect()
+
 def main():
+    # Fix para multiprocessing en algunos Linux
+    try:
+        set_start_method('forkserver', force=True)
+    except RuntimeError:
+        pass
+
     print(f"Cargando {CSV_FILE}...")
     df = pd.read_csv(CSV_FILE, usecols=['code', 'cwe_id']).dropna(subset=['code'])
     df['label_id'] = df['cwe_id'].apply(get_label_id)
-    
-    # Solo usaremos TRAIN para esto (Validation no debe tener augmentation)
-    # Aquí puedes filtrar si quieres solo procesar train o todo
-    print(f"Total muestras: {len(df)}")
 
-    # Configurar Multiprocessing
+    # Split
+    train_df, val_df = train_test_split(
+        df, test_size=TEST_SIZE, stratify=df['label_id'], random_state=SEED
+    )
+    print(f"Split: Train={len(train_df)}, Val={len(val_df)}")
+
+    # Preparar carpetas
+    setup_output_dir(OUTPUT_DIR_TRAIN)
+    setup_output_dir(OUTPUT_DIR_VAL)
+
+    # Configurar cores
     num_cores = 4
-    print(f"Iniciando procesamiento paralelo con {num_cores} núcleos...")
     
-    # Dividir el dataframe en chunks
-    df_chunks = np.array_split(df, num_cores * 4) # 4 tareas por núcleo para mejor balanceo
+    # 1. PROCESAR TRAIN
+    print(f"\n{'='*40}\nIniciando TRAIN (Augmentation=True)\n{'='*40}")
+    process_and_save(train_df, OUTPUT_DIR_TRAIN, use_augment=True, num_cores=num_cores)
     
-    # Preparar argumentos (pasamos el path del tokenizer para cargarlo en cada proceso)
-    tasks = [(chunk, MODEL_NAME) for chunk in df_chunks]
-    
-    all_data = []
-    
-    # Ejecutar Pool
-    with Pool(processes=num_cores) as pool:
-        # Usamos tqdm para barra de progreso
-        results = list(tqdm(pool.imap(process_chunk, tasks), total=len(tasks), unit="chunk"))
-    
-    # Aplanar lista de listas
-    print("Uniendo resultados...")
-    for res in results:
-        all_data.extend(res)
-        
-    print(f"Guardando {len(all_data)} muestras procesadas en {OUTPUT_FILE}...")
-    torch.save(all_data, OUTPUT_FILE)
+    # 2. PROCESAR VAL
+    print(f"\n{'='*40}\nIniciando VAL (Augmentation=False)\n{'='*40}")
+    process_and_save(val_df, OUTPUT_DIR_VAL, use_augment=False, num_cores=num_cores)
+
+    print("\n[SUCCESS] Todo procesado y guardado en carpetas.")
 
 if __name__ == '__main__':
     main()
