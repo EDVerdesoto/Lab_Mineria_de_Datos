@@ -1,0 +1,15 @@
+services:
+  security-api:
+    build: .
+    container_name: security_audit_api
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - TELEGRAM_TOKEN=8441981044:AAHtYFQ0-RhYJ3Q2wGsVFyRjeLH12NIiuS0
+      - TELEGRAM_CHAT_ID=7690881680
+    volumes:
+      - ./models:/app/models:Z
+    resources:
+      limits:
+        memory: 4G
