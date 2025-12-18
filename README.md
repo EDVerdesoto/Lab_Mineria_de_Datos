@@ -79,7 +79,7 @@ El sistema notifica en tiempo real sobre el estado del análisis, fallos de segu
 
 ---
 *Generado para la asignatura de Desarrollo de Software Seguro - 2025*
-![1766033617076](image/README/1766033617076.png)# Lab Minería de Datos - Sistema de Detección de Vulnerabilidades
+# Lab Minería de Datos - Sistema de Detección de Vulnerabilidades
 
 ## Descripción
 Sistema de análisis de código estático para detección de vulnerabilidades de seguridad utilizando **CodeBERT** fine-tuned en el dataset CVEfixes. El modelo clasifica fragmentos de código en diferentes categorías CWE (Common Weakness Enumeration) o como código seguro.
